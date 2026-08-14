@@ -1,0 +1,89 @@
+% References for CellAveragePBE.
+%
+% Two distinct literatures are cited here and they are easy to conflate:
+%
+%   * The DISCRETIZATION.  The scheme implemented in src/cellaverage.jl is the
+%     cell average technique of J. Kumar et al. (kumar2006cellaverage), extended
+%     to combined growth and breakage in kumar2008efficient.  It is NOT the fixed
+%     pivot technique -- that is kumar1996fixedpivot, by a different Kumar
+%     (S. Kumar, with Ramkrishna).  The fixed pivot redistributes each birth
+%     across its bracketing nodes individually; the cell average first averages
+%     all births within a cell to a single representative mass and redistributes
+%     that.  Cite kumar1996fixedpivot only as the predecessor lineage.
+%
+%   * The YEAST MODEL.  The kinetics, division kernels and parameter values are
+%     the Henson-group cell population balance model (zhu2000mpc, zhang2002cell,
+%     reviewed in henson2003dynamic).  They are published values, not fitted here.
+
+@article{kumar1996fixedpivot,
+  author  = {Kumar, Sanjeev and Ramkrishna, Doraiswami},
+  title   = {On the solution of population balance equations by discretization---{I}. {A} fixed pivot technique},
+  journal = {Chemical Engineering Science},
+  volume  = {51},
+  number  = {8},
+  pages   = {1311--1332},
+  year    = {1996},
+  doi     = {10.1016/0009-2509(96)88489-2},
+  note    = {The fixed pivot technique -- the sectional lineage that the cell average method improves on. Not the method implemented here.}
+}
+
+@article{kumar2006cellaverage,
+  author  = {Kumar, Jitendra and Peglow, Mirko and Warnecke, Gerald and Heinrich, Stefan and M{\"o}rl, Lothar},
+  title   = {Improved accuracy and convergence of discretized population balance for aggregation: the cell average technique},
+  journal = {Chemical Engineering Science},
+  volume  = {61},
+  number  = {10},
+  pages   = {3327--3342},
+  year    = {2006},
+  doi     = {10.1016/j.ces.2005.12.014},
+  note    = {The cell average technique itself. This is the scheme implemented in src/cellaverage.jl.}
+}
+
+@article{kumar2008efficient,
+  author  = {Kumar, Jitendra and Peglow, Mirko and Warnecke, Gerald and Heinrich, Stefan},
+  title   = {An efficient numerical technique for solving population balance equation involving aggregation, breakage, growth and nucleation},
+  journal = {Powder Technology},
+  year    = {2008},
+  doi     = {10.1016/j.powtec.2007.05.028},
+  note    = {Cell average extended to combined growth and breakage, which is the combination solved here. Volume and page numbers not verified against the publisher record.}
+}
+
+@book{ramkrishna2000population,
+  author    = {Ramkrishna, Doraiswami},
+  title     = {Population Balances: Theory and Applications to Particulate Systems in Engineering},
+  publisher = {Academic Press},
+  address   = {San Diego},
+  year      = {2000},
+  note      = {General reference for the population balance formulation.}
+}
+
+@article{zhu2000mpc,
+  author  = {Zhu, Guang-Yan and Zamamiri, Abdelqader and Henson, Michael A. and Hjorts{\o}, Martin A.},
+  title   = {Model predictive control of continuous yeast bioreactors using cell population balance models},
+  journal = {Chemical Engineering Science},
+  volume  = {55},
+  pages   = {6155--6167},
+  year    = {2000},
+  doi     = {10.1016/S0009-2509(00)00208-6},
+  note    = {Source of the yeast kinetics, division kernels and parameter values used here.}
+}
+
+@article{zhang2002cell,
+  author  = {Zhang, Yongchun and Zamamiri, Abdelqader M. and Henson, Michael A. and Hjorts{\o}, Martin A.},
+  title   = {Cell population models for bifurcation analysis and nonlinear control of continuous yeast bioreactors},
+  journal = {Journal of Process Control},
+  volume  = {12},
+  pages   = {721--734},
+  year    = {2002},
+  doi     = {10.1016/S0959-1524(02)00003-4},
+  note    = {Companion cell population balance model; the sustained oscillations reproduced here are this model class.}
+}
+
+@article{henson2003dynamic,
+  author  = {Henson, Michael A.},
+  title   = {Dynamic modeling of microbial cell populations},
+  journal = {Current Opinion in Biotechnology},
+  year    = {2003},
+  doi     = {10.1016/S0958-1669(03)00104-6},
+  note    = {Review of this model class. Volume and page numbers not verified against the publisher record.}
+}

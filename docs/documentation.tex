@@ -1,0 +1,329 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{fontspec}
+\newfontfamily\codefont{FreeMono}[Scale=0.92]
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{parskip}
+
+\definecolor{linkblue}{RGB}{0,102,204}
+\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{codekw}{RGB}{0,90,160}
+\definecolor{codecom}{RGB}{110,110,110}
+\hypersetup{colorlinks=true, linkcolor=linkblue, urlcolor=linkblue, citecolor=linkblue}
+
+\lstdefinelanguage{Julia}{
+  keywords={function,end,for,in,if,elseif,else,struct,module,using,import,return,while,mutable,const,export,begin},
+  sensitive=true,
+  comment=[l]{\#},
+  morestring=[b]",
+}
+\lstset{
+  language=Julia,
+  backgroundcolor=\color{codebg},
+  basicstyle=\codefont\small,
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codecom}\itshape,
+  stringstyle=\color{black},
+  frame=single,
+  rulecolor=\color{codebg},
+  breaklines=true,
+  showstringspaces=false,
+  columns=fullflexible,
+  xleftmargin=1em,
+  extendedchars=true,
+}
+
+\title{\textbf{CellAveragePBE}\\[0.3em]
+  \large A Cell-Average Population-Balance Solver for Yeast Fermentation\\[0.2em]
+  \normalsize Codebase Documentation}
+\author{Kyle G. Hawkins, Ph.D.\\[0.3em]
+  % Contact address for anything in this repo is the github.com passmail alias, NOT the
+  % personal protonmail used on resumes and cover letters. Set 2026-08-14. It matches the
+  % git author identity on every commit here, so it is already public in this repo's history
+  % -- and being a scoped alias, it can be burned without touching the real inbox.
+  \normalsize \href{mailto:github.com.strict015@passmail.net}{github.com.strict015@passmail.net}
+  \quad\textbullet\quad
+  \href{https://github.com/Kyle-Hawkins}{github.com/Kyle-Hawkins}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent\textsc{CellAveragePBE} is a Julia package that solves a size-structured population
+balance for a growing, dividing yeast population, coupled to a well-mixed bioreactor chemistry
+model. The population balance is a mesoscopic integro-partial-differential equation discretized with
+the Cell Average Technique for division and a first-order upwind flux for growth; the chemistry is a
+stiff system of eight ordinary differential equations. The fully coupled model reproduces the
+sustained metabolic oscillations characteristic of the Henson yeast system. This document describes
+the mathematical model, the numerical methods, the software architecture, and the public API.
+
+\vspace{0.5em}
+\noindent\textit{The complete source is at \url{https://github.com/Kyle-Hawkins/CellAveragePBE} (MIT).}
+\end{abstract}
+
+\tableofcontents
+\vspace{1em}
+
+\section{Overview}
+The package integrates the coupled system
+\begin{equation}
+\frac{\partial N(x,t)}{\partial t} + \frac{\partial\,[\,g\,N(x,t)\,]}{\partial x}
+   = \underbrace{B_{\mathrm{div}}(x,t)}_{\text{division birth}}
+   - \underbrace{\big[\,S(x) + D\,\big]\,N(x,t)}_{\text{division + dilution loss}},
+\label{eq:pbe}
+\end{equation}
+for the cell number density $N(x,t)$ over cell mass $x$, together with eight ordinary differential
+equations for the liquid- and gas-phase chemistry (glucose, ethanol, dissolved and gas-phase oxygen
+and carbon dioxide, and two ``effective'' sensed concentrations). Here $g$ is the mass-specific
+growth rate, $S(x)$ the division (selection) rate, and $D$ the dilution rate. The growth rate and
+division kernels depend on the local chemistry, closing the coupling.
+
+\section{Mathematical model}
+
+\subsection{Division kernels}
+A dividing mother of mass $y$ produces daughters distributed according to the breakage kernel
+\begin{equation}
+b(x,y) = A\Big[\,e^{-\beta (x - m_t)^2} + e^{-\beta (x - (y - m_t))^2}\,\Big],
+\qquad x \le y,\; y > m_t + m_0,
+\end{equation}
+two Gaussian lobes centered on the transition mass $m_t$ and its complement $y - m_t$. The division
+rate is set by the selection kernel
+\begin{equation}
+S(x) = \gamma\, e^{-\varepsilon (x - m_d)^2}\,\mathbb{1}[\,m_t - m_0 \le x \le m_d\,]
+      + \gamma\,\mathbb{1}[\,x > m_d\,],
+\end{equation}
+a Gaussian rising to a plateau above the division mass $m_d$. The masses $m_t(S)$ and $m_d(S)$ are
+piecewise-linear functions of the local substrate concentration $S = G_{\mathrm{eff}} + E_{\mathrm{eff}}$.
+
+\subsection{Growth kinetics}
+The mass-specific growth rate is a sum of three Monod modes (fermentative glucose uptake, oxidative
+glucose uptake, oxidative ethanol uptake with glucose inhibition):
+\begin{align}
+K_{gf}(G) &= \mu_{gf}\frac{G}{K_{gf}+G}, &
+K_{go}(G,O) &= \mu_{go}\frac{G}{K_{go}+G}\frac{O}{K_{gd}+O}, \\
+K_{eo}(G,E,O) &= \mu_{eo}\frac{E}{K_{eo}+E}\frac{O}{K_{ed}+O}\frac{K_i}{K_i+G}, &
+g &= K_{gf} + K_{go} + K_{eo}.
+\end{align}
+All concentration arguments are clamped at zero before entering the saturation terms, which keeps the
+rates physical (they vanish as a substrate is depleted) and the coupled ODE stable.
+
+\subsection{Bioreactor chemistry}
+The eight chemistry states evolve by feed/dilution, gas--liquid mass transfer, and metabolic demand
+integrated over the population, e.g.\ for glucose
+\begin{equation}
+\frac{dG}{dt} = D\,(G_f - G) - \int N(x)\Big(\tfrac{K_{gf}}{Y_{gf}} + \tfrac{K_{go}}{Y_{go}}\Big)\,dx,
+\end{equation}
+with analogous balances for ethanol, oxygen, and carbon dioxide. The effective concentrations relax
+toward the bulk values with a first-order sensing lag, $\dot G_{\mathrm{eff}} = \alpha_g (G - G_{\mathrm{eff}})$.
+
+\section{Numerical methods}
+
+\begin{description}[leftmargin=1.5em, style=nextline]
+\item[Division (integro-PDE).] The birth term is a double integral over dividing mothers. All
+newborns produced within a cell are first averaged into a single representative mass
+$\bar v = V_b/B_b$, and that average is then redistributed onto the two neighboring grid nodes ---
+the \emph{Cell Average Technique} of Kumar et al.~\cite{kumar2006cellaverage,kumar2008efficient} ---
+which conserves both the number and the
+mass placed on the coarse grid. Averaging before redistributing is what separates this scheme from
+the earlier \emph{fixed pivot} technique~\cite{kumar1996fixedpivot}, which splits each birth across its bracketing nodes
+individually and so discards the information about where inside the cell the births concentrated;
+on coarse grids that discarding over-predicts the number density in the large-mass tail. The inner
+breakage integrals are evaluated with adaptive Gauss--Kronrod quadrature
+(\texttt{QuadGK}), pruned by skipping cells with zero division rate.
+\item[Growth (advection).] Cell growth is a first-order \emph{upwind} finite-volume flux
+$-\partial(gN)/\partial x$ that advects cells up the mass axis.
+\item[Coupled integration.] The full state (the $n$ population cells plus eight chemistry ODEs) is
+advanced with \texttt{FBDF}, a variable-order BDF method, using a finite-difference Jacobian --- the
+non-smooth division kernels are not amenable to automatic differentiation.
+\item[Stability.] Clamping the substrate/oxygen concentrations at zero inside the kinetics keeps the
+fast startup transient physical and the stiff solve well-posed.
+\end{description}
+
+\section{Source files}
+The package is organized into small, single-purpose files. The table gives an at-a-glance summary;
+each file is then described in turn.
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{File} & \textbf{Responsibility} \\
+\midrule
+\texttt{src/CellAveragePBE.jl} & top-level module: dependencies, includes, exports \\
+\texttt{src/parameters.jl}  & all physical/numerical constants in one keyword struct \\
+\texttt{src/grid.jl}        & mass grid and cell-average interpolation weights \\
+\texttt{src/kernels.jl}     & division-mass thresholds, breakage, selection, ethanol formation \\
+\texttt{src/kinetics.jl}    & Monod growth kinetics (concentration-clamped) \\
+\texttt{src/cellaverage.jl} & Cell Average Technique birth term \\
+\texttt{src/chemistry.jl}   & the eight coupled bioreactor ODEs \\
+\texttt{src/model.jl}       & right-hand-side assembly, initial conditions, solve drivers \\
+\texttt{test/runtests.jl}   & 26-test suite (grid, kernels, kinetics, quadrature, RHS) \\
+\texttt{examples/demo.jl}   & minimal runnable demonstration script \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{\texttt{src/CellAveragePBE.jl}}
+The top-level module. It loads the dependencies (\texttt{QuadGK} for quadrature, \texttt{OrdinaryDiffEq}
+for time integration, and \texttt{ADTypes} for the finite-difference Jacobian specifier),
+\texttt{include}s the component files in dependency order, and \texttt{export}s the public API --- the
+parameter, grid, and state types, the kernels and kinetics, and the solve drivers.
+
+\lstinputlisting{../src/CellAveragePBE.jl}
+
+\subsection{\texttt{src/parameters.jl}}
+Defines \texttt{PBEParameters}, an immutable \texttt{Base.@kwdef} struct holding every physical and
+numerical constant: the Monod kinetic parameters, the piecewise-linear division-mass constants, the
+breakage/selection/ethanol kernel shape parameters, the growth regularizers, and the bioreactor-chemistry
+constants. Collecting all constants in one keyword-constructed struct keeps them out of the function
+bodies and makes the model reproducible and easy to perturb --- any subset
+is overridden by keyword, e.g.\ \texttt{PBEParameters(D = 0.3)}.
+
+\lstinputlisting{../src/parameters.jl}
+
+\subsection{\texttt{src/grid.jl}}
+Defines \texttt{MassGrid}, a uniform mass grid storing the $n+1$ cell edges (\texttt{bounds}) and the
+$n$ cell midpoints (\texttt{centers}); cell $i$ occupies $[\,\texttt{bounds}[i],\,\texttt{bounds}[i{+}1]\,]$.
+It also provides two helpers used by the Cell Average Technique: \texttt{p\_upper}, the upper integration
+limit for daughters of a given mother cell, and \texttt{lambda\_weight}, the linear interpolation weight
+that redistributes a newborn onto a neighboring node.
+
+\lstinputlisting{../src/grid.jl}
+
+\subsection{\texttt{src/kernels.jl}}
+The population-balance kernels, written as plain branchy Julia (replacing the original
+Heaviside-based lambdas). \texttt{m\_ts} and \texttt{m\_ds} give the transition and division masses as
+continuous piecewise-linear functions of substrate. \texttt{breakage} is the two-Gaussian daughter-mass
+distribution (gated so daughters are lighter than the mother and only sufficiently large mothers divide);
+\texttt{selection} is the division-rate kernel; \texttt{ethanol\_formation} is the mass-specific
+ethanol-production weight.
+
+\lstinputlisting{../src/kernels.jl}
+
+\subsection{\texttt{src/kinetics.jl}}
+The Monod growth kinetics: \texttt{K\_gf}, \texttt{K\_go}, \texttt{K\_eo} for the three metabolic modes
+and \texttt{K\_net} for their sum. Each concentration argument passes through $\texttt{pos}(x)=\max(x,0)$
+before entering a saturation term, so a transient overshoot to a slightly negative oxygen or glucose
+concentration cannot make an $O(10^{-3})$-affinity denominator blow up --- the rates simply vanish as a
+substrate is depleted, keeping the coupled stiff solve well-posed.
+
+\lstinputlisting{../src/kinetics.jl}
+
+\subsection{\texttt{src/cellaverage.jl}}
+Implements the Cell Average Technique for the division birth term. \texttt{breakage\_births} computes,
+once per right-hand-side evaluation, the number- and mass-birth into every cell as a sum over dividing
+mother cells (each inner integral by adaptive Gauss--Kronrod quadrature, with zero-rate cells skipped to
+prune most of the nominal $O(n^2)$ work). \texttt{birth\_CA} then redistributes those newborns onto each
+interior node: it forms the average newborn mass $\bar v = V/B$ in the cell and its two neighbors and
+splits each contribution onto the node with linear weights, gated by where $\bar v$ falls, so that number
+and mass are placed consistently on the coarse grid.
+
+\lstinputlisting{../src/cellaverage.jl}
+
+\subsection{\texttt{src/chemistry.jl}}
+Defines the \texttt{ChemState} container for the eight chemistry species, a composite-trapezoid
+integrator \texttt{trapz} for integrating metabolic demand over the population, and
+\texttt{chemistry\_derivs}, which returns the eight time derivatives: feed/dilution and gas--liquid mass
+transfer balanced against the population's substrate uptake and product formation, plus the first-order
+relaxation of the effective (sensed) concentrations.
+
+\lstinputlisting{../src/chemistry.jl}
+
+\subsection{\texttt{src/model.jl}}
+Assembles and solves the coupled system. \texttt{pbe\_ode\_term} gives the net rate for one interior cell
+--- division birth (from \texttt{cellaverage.jl}) plus the first-order upwind growth-advection flux, minus
+dilution and division loss. \texttt{pbe\_rhs!} is the in-place right-hand side of the full $n+8$ state
+(population cells with fixed end caps, followed by the chemistry). \texttt{initial\_state} builds the
+bimodal initial distribution and chemistry vector; \texttt{solve\_pbe} constructs the \texttt{ODEProblem}
+and integrates it with a stiff BDF solver (the \texttt{N\_scale} keyword sets the
+cell-number-to-concentration coupling factor). \texttt{pbe\_population\_rhs!} and \texttt{solve\_population}
+provide the population-only variant in a fixed chemical environment, and \texttt{split\_state} unpacks a
+solution vector into \texttt{(N, ChemState)}.
+
+\lstinputlisting{../src/model.jl}
+
+\subsection{\texttt{test/runtests.jl}}
+The 26-test suite. It checks grid construction and the edge/center invariants; continuity of the
+division-mass functions at their breakpoints and the gating of the breakage, selection, and
+ethanol-formation kernels; saturation and positivity of the Monod kinetics; the trapezoidal integrator
+against known integrals; and that the assembled right-hand side is finite, correctly sized, and holds the
+boundary cells fixed.
+
+\lstinputlisting{../test/runtests.jl}
+
+\subsection{\texttt{examples/demo.jl}}
+A minimal, dependency-light script that solves the coupled model and the population-only model and prints
+summary diagnostics --- a quick check that the package runs end to end.
+
+\lstinputlisting{../examples/demo.jl}
+
+\section{Public API}
+
+\paragraph{Types.}
+\begin{description}[leftmargin=1.5em, style=nextline]
+\item[\texttt{PBEParameters}] Immutable, keyword-constructed struct holding every model constant
+(kinetics, division thresholds, kernels, chemistry). Override any subset by keyword, e.g.
+\texttt{PBEParameters(D = 0.3)}.
+\item[\texttt{MassGrid(n; xmax)}] A uniform mass grid of \texttt{n} cells on $[0,\texttt{xmax}]$,
+storing cell edges and midpoints.
+\item[\texttt{ChemState}] The eight chemistry states $(G, G_{\mathrm{eff}}, E, E_{\mathrm{eff}}, O, O_{\mathrm{out}}, C, C_{\mathrm{out}})$.
+\end{description}
+
+\paragraph{Drivers.}
+\begin{description}[leftmargin=1.5em, style=nextline]
+\item[\texttt{solve\_pbe(; n, tspan, p, N\_scale, \ldots)}] Build and integrate the fully coupled
+population + chemistry system. Returns \texttt{(sol, grid, p)}; each solution state has length
+$n + 8$. \texttt{N\_scale} sets the cell-number-to-concentration coupling factor.
+\item[\texttt{solve\_population(; n, tspan, env, N0, \ldots)}] Integrate the population balance alone
+in a fixed chemical environment \texttt{env}; useful for isolating the growth/division numerics.
+\item[\texttt{split\_state(u, n)}] Split a solution state vector into \texttt{(N, ChemState)}.
+\end{description}
+
+\paragraph{Kernels and kinetics.} \texttt{m\_ts}, \texttt{m\_ds}, \texttt{breakage},
+\texttt{selection}, \texttt{ethanol\_formation}, \texttt{K\_gf}, \texttt{K\_go}, \texttt{K\_eo},
+\texttt{K\_net} are all exported for inspection and plotting.
+
+\section{Usage}
+\begin{lstlisting}
+using Pkg; Pkg.activate("."); Pkg.instantiate()
+using CellAveragePBE
+
+# Coupled bioreactor -- sustained metabolic oscillations
+out = solve_pbe(n = 60, tspan = (0.0, 25.0), p = PBEParameters(D = 0.3), N_scale = 1/500)
+N, chem = split_state(out.sol.u[end], out.grid.n)
+
+# Population balance alone, in a fixed chemical environment
+outp = solve_population(n = 80, tspan = (0.0, 4.0))
+\end{lstlisting}
+
+\section{Testing}
+The suite in \texttt{test/runtests.jl} (26 tests) verifies grid construction, continuity and gating of
+the kernels, saturation of the Monod kinetics, the trapezoidal integrator, and well-formedness of the
+right-hand side. Run it with:
+\begin{lstlisting}
+julia --project=. -e 'using Pkg; Pkg.test()'
+\end{lstlisting}
+
+% The bibliography is generated from references.bib. `unsrt' numbers entries in order
+% of FIRST CITATION in the text, not in \nocite order -- the \nocite below only
+% guarantees that every entry appears even if it is never cited inline. Do not rely on
+% the numbers being stable: cite by key, never by number, and note that README.md
+% deliberately uses author-year so it cannot drift out of sync with this list.
+% Build: lualatex, bibtex, lualatex x2.
+\nocite{kumar1996fixedpivot,kumar2006cellaverage,kumar2008efficient,%
+ramkrishna2000population,zhu2000mpc,zhang2002cell,henson2003dynamic}
+\bibliographystyle{unsrt}
+\bibliography{references}
+
+\noindent The division kernels, the piecewise-linear transition and division masses, the
+three-mode Monod kinetics and the effective (sensed) concentrations follow the Henson-group
+yeast model \cite{zhu2000mpc,zhang2002cell,henson2003dynamic}. The parameters in
+\texttt{src/parameters.jl} are that model's published values; they were not fitted here.
+
+\end{document}

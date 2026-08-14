@@ -1,0 +1,25 @@
+# Julia
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+/docs/build/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+*.bbl
+*.blg
+
+# Roadmap/planning notes — not part of the published package
+docs/fem-variant-plan.md
+
+# Jupyter
+.ipynb_checkpoints/
+
+# PDF-tooling virtualenv (not part of the package)
+.jupyter-venv/
